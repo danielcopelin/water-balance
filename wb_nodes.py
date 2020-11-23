@@ -95,7 +95,7 @@ class Storage(Base):
 
         # handle et & record in results
         if self.area > 0:
-            et_volume = max(
+            et_volume = min(
                 self.volume.loc[time],
                 self.simulation.pet.loc[time] * self.area / 1000.0,
             )
@@ -104,7 +104,7 @@ class Storage(Base):
 
         # handle leakage & record in results
         if self.leakage_rate > 0:
-            leakage = max(self.volume.loc[time], self.leakage_rate)
+            leakage = min(self.volume.loc[time], self.leakage_rate)
             self.volume.loc[time] = self.volume.loc[time] - leakage
             self.leakage.loc[time] = leakage
 
@@ -116,7 +116,7 @@ class Storage(Base):
         else:
             overflow = 0.0
 
-        if self.outlet:
+        if self.outlet is not None:
             self.outlet.put(overflow)
 
     def take(self, requested_volume):
@@ -149,7 +149,7 @@ class SurfaceAWBM(Base):
         simulation: Simulation,
         area: float,
         imp_frac: float,
-        outlet: Storage,
+        outlet: Union[Storage, None],
         a1: float = 0.134,
         a2: float = 0.433,
         c1: float = 7.0,
@@ -204,10 +204,15 @@ class SurfaceAWBM(Base):
             data=0.0,
             name=f"{self.name}_surface_et",
         )
-        self.excess = pd.Series(
+        self.pervious_excess = pd.Series(
             index=self.simulation.rainfall.index,
             data=0.0,
-            name=f"{self.name}_surface_excess",
+            name=f"{self.name}_surface_pervious_excess",
+        )
+        self.imp_excess = pd.Series(
+            index=self.simulation.rainfall.index,
+            data=0.0,
+            name=f"{self.name}_surface_imp_excess",
         )
         self.runoff_store = pd.Series(
             index=self.simulation.rainfall.index,
@@ -264,9 +269,9 @@ class SurfaceAWBM(Base):
         et = (self.a1 * et1 + self.a2 * et2 + self.a3 * et3) * (1.0 - self.imp_frac) + (
             eti * self.imp_frac
         )
-        self.et.loc[time] = et
+        self.et.loc[time] = et * self.area / 1000.0
 
-        # calculate rainfall excess
+        # calculate rainfall excess (mm)
         if self.store1.loc[time] > self.c1:
             e1 = self.store1.loc[time] - self.c1
             self.store1.loc[time] = self.store1.loc[time] - e1
@@ -288,28 +293,38 @@ class SurfaceAWBM(Base):
         else:
             ei = 0.0
 
-        excess = (self.a1 * e1 + self.a2 * e2 + self.a3 * e3) * (
+        # calculate excess volume from pervious areas
+        pervious_excess = (self.a1 * e1 + self.a2 * e2 + self.a3 * e3) * (
             1.0 - self.imp_frac
-        ) + (ei * self.imp_frac) * self.area
-        self.excess.loc[time] = excess
+        ) * self.area / 1000.0 # in m3
+        self.pervious_excess.loc[time] = pervious_excess
 
-        # route baseflow and runoff through stores
+        # calculate impervious excess volume and route directly
+        imp_excess = ei * self.imp_frac * self.area / 1000.0 # in m3
+        self.imp_excess.loc[time] = imp_excess
+        self.runoff.loc[time] = imp_excess
+
+        # route baseflow and runoff from pervious excess through stores
         self.baseflow_store.loc[time] = (
-            self.baseflow_store.loc[time_previous] + excess * self.bfi
+            self.baseflow_store.loc[time_previous] + (pervious_excess * self.bfi)
         )
         baseflow = (1.0 - self.kbase) * self.baseflow_store.loc[time]
+        self.baseflow_store[time] = self.baseflow_store[time] - baseflow
         self.baseflow.loc[time] = baseflow
 
-        self.runoff_store.loc[time] = self.runoff_store.loc[time_previous] + excess * (
+        self.runoff_store.loc[time] = self.runoff_store.loc[time_previous] + ((pervious_excess) * (
             1.0 - self.bfi
-        )
+        ))
         runoff = (1.0 - self.ksurf) * self.runoff_store.loc[time]
-        self.runoff.loc[time] = runoff
+        self.runoff_store[time] = self.runoff_store[time] - runoff
+        self.runoff.loc[time] = self.runoff.loc[time] + runoff
 
         # calculate total flow and send to outlet
         total_runoff = self.baseflow.loc[time] + self.runoff.loc[time]
         self.total_runoff.loc[time] = total_runoff
-        self.outlet.put(total_runoff)
+
+        if self.outlet is not None:
+            self.outlet.put(total_runoff)
 
 
 class Mains(Base):
