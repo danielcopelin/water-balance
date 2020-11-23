@@ -294,27 +294,30 @@ class SurfaceAWBM(Base):
             ei = 0.0
 
         # calculate excess volume from pervious areas
-        pervious_excess = (self.a1 * e1 + self.a2 * e2 + self.a3 * e3) * (
-            1.0 - self.imp_frac
-        ) * self.area / 1000.0 # in m3
+        pervious_excess = (
+            (self.a1 * e1 + self.a2 * e2 + self.a3 * e3)
+            * (1.0 - self.imp_frac)
+            * self.area
+            / 1000.0
+        )  # in m3
         self.pervious_excess.loc[time] = pervious_excess
 
         # calculate impervious excess volume and route directly
-        imp_excess = ei * self.imp_frac * self.area / 1000.0 # in m3
+        imp_excess = ei * self.imp_frac * self.area / 1000.0  # in m3
         self.imp_excess.loc[time] = imp_excess
         self.runoff.loc[time] = imp_excess
 
         # route baseflow and runoff from pervious excess through stores
-        self.baseflow_store.loc[time] = (
-            self.baseflow_store.loc[time_previous] + (pervious_excess * self.bfi)
+        self.baseflow_store.loc[time] = self.baseflow_store.loc[time_previous] + (
+            pervious_excess * self.bfi
         )
         baseflow = (1.0 - self.kbase) * self.baseflow_store.loc[time]
         self.baseflow_store[time] = self.baseflow_store[time] - baseflow
         self.baseflow.loc[time] = baseflow
 
-        self.runoff_store.loc[time] = self.runoff_store.loc[time_previous] + ((pervious_excess) * (
-            1.0 - self.bfi
-        ))
+        self.runoff_store.loc[time] = self.runoff_store.loc[time_previous] + (
+            (pervious_excess) * (1.0 - self.bfi)
+        )
         runoff = (1.0 - self.ksurf) * self.runoff_store.loc[time]
         self.runoff_store[time] = self.runoff_store[time] - runoff
         self.runoff.loc[time] = self.runoff.loc[time] + runoff
