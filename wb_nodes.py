@@ -44,6 +44,10 @@ class Storage(Base):
         self.leakage_rate = leakage_rate
         self.outlet = outlet
 
+        self.direct_rainfall = self.simulation.rainfall * self.area / 1000.0
+
+        self.completed_step = pd.Timestamp("1900-01-01")
+
         # initialise series to contain results
         self.inflow = pd.Series(
             index=simulation.rainfall.index,
@@ -73,6 +77,15 @@ class Storage(Base):
             data=0.0,
             name=f"{self.name}_storage_leakage",
         )
+        self.results = [
+            self.direct_rainfall,
+            self.inflow,
+            self.volume,
+            self.supplied,
+            self.overflow,
+            self.et,
+            self.leakage,
+        ]
 
         # update initial volume
         self.volume[0] = self.initial_volume
@@ -84,12 +97,14 @@ class Storage(Base):
         time = self.simulation.time
         time_previous = self.simulation.time_previous
 
-        # bring forward previous volume
-        self.volume.loc[time] = self.volume.loc[time_previous]
+        # make sure that previous volume is only carried forward once per step
+        if self.completed_step < time:
+            self.volume.loc[time] = self.volume.loc[time_previous]
+            self.completed_step = time
 
         # handle rainfall on storage & record in results
         if self.area > 0:
-            rainfall_volume = self.simulation.rainfall.loc[time] * self.area / 1000.0
+            rainfall_volume = self.direct_rainfall.loc[time]
             self.volume.loc[time] = self.volume.loc[time] + rainfall_volume
             self.inflow.loc[time] = self.inflow.loc[time] + rainfall_volume
 
@@ -119,9 +134,18 @@ class Storage(Base):
         if self.outlet is not None:
             self.outlet.put(overflow)
 
+        self.done = False
+
     def take(self, requested_volume):
         time = self.simulation.time
-        current_volume = self.volume[time]
+        time_previous = self.simulation.time_previous
+
+        # make sure that previous volume is only carried forward once per step
+        if self.completed_step < time:
+            self.volume.loc[time] = self.volume.loc[time_previous]
+            self.completed_step = time
+
+        current_volume = self.volume.loc[time]
 
         if requested_volume <= current_volume:
             supplied_volume = requested_volume
@@ -136,9 +160,23 @@ class Storage(Base):
 
     def put(self, incoming_volume):
         time = self.simulation.time
+        time_previous = self.simulation.time_previous
 
-        # update storage volume and record incoming flows in results
+        # make sure that previous volume is only carried forward once per step
+        if self.completed_step < time:
+            self.volume.loc[time] = self.volume.loc[time_previous]
+            self.completed_step = time
+
+        # update storage volume, handle overflows immediately and record incoming flows in results
+        # new_volume = self.volume.loc[time] + incoming_volume
+        # if new_volume > self.max_volume:
+        #     overflow_volume = new_volume - self.max_volume
+        # else:
+        #     overflow_volume = 0.0
+        # stored_volume = incoming_volume - overflow_volume
+
         self.volume.loc[time] = self.volume.loc[time] + incoming_volume
+        # self.overflow.loc[time] = self.overflow.loc[time] + overflow_volume
         self.inflow.loc[time] = self.inflow.loc[time] + incoming_volume
 
 
@@ -160,7 +198,6 @@ class SurfaceAWBM(Base):
         ksurf: float = 0.35,
         i: float = 1.0,
     ):
-
         self.name = name
         self.simulation = simulation
         self.area = area
@@ -174,9 +211,18 @@ class SurfaceAWBM(Base):
         self.c2 = c2
         self.c3 = c3
         self.bfi = Factor(bfi)
-        self.kbase = Factor(kbase)
-        self.ksurf = Factor(ksurf)
+        self.kbase = Factor(
+            kbase
+        )  # TODO handle non-daily timesteps by converting this factor
+        self.ksurf = Factor(
+            ksurf
+        )  # TODO handle non-daily timesteps by converting this factor
         self.i = i
+
+        self.rainfall_volume = pd.Series(
+            self.simulation.rainfall * self.area / 1000.0,
+            name=f"{self.name}_surface_rainfall_volume",
+        )
 
         # initialise series to contain results
         self.store1 = pd.Series(
@@ -239,6 +285,21 @@ class SurfaceAWBM(Base):
             data=0.0,
             name=f"{self.name}_surface_total_runoff",
         )
+        self.results = [
+            self.rainfall_volume,
+            self.store1,
+            self.store2,
+            self.store3,
+            self.imp_store,
+            self.et,
+            self.pervious_excess,
+            self.imp_excess,
+            self.runoff_store,
+            self.runoff,
+            self.baseflow_store,
+            self.baseflow,
+            self.total_runoff,
+        ]
 
         # register with simulation
         self.simulation.surfaces[self.name] = self
@@ -331,12 +392,15 @@ class SurfaceAWBM(Base):
 
 
 class Mains(Base):
-    def __init__(self, simulation: Simulation):
+    def __init__(self, name: str, simulation: Simulation):
+        self.name = name
+        self.simulation = simulation
 
         # initialise series to contain results
         self.supply = pd.Series(
             index=simulation.rainfall.index, data=0.0, name=f"{self.name}_mains_supply"
         )
+        self.results = [self.supply]
 
         # register with simulation
         self.simulation.mains[self.name] = self
@@ -379,6 +443,11 @@ class Demand(Base):
             data=0.0,
             name=f"{self.name}_demand_wastewater_stream",
         )
+        self.results = [
+            self.source_supplied,
+            self.backup_supplied,
+            self.wastewater_stream,
+        ]
 
         # register with simulation
         self.simulation.demands[self.name] = self
@@ -412,19 +481,20 @@ class Pump(Base):
         destination: Storage,
         scheduled_flows: pd.Series,
     ):
-        self.name: name
-        self.simulation: simulation
-        self.source: source
-        self.destination: destination
-        self.scheduled_flows: scheduled_flows
+        self.name = name
+        self.simulation = simulation
+        self.source = source
+        self.destination = destination
+        self.scheduled_flows = scheduled_flows
 
         # initialise series to contain results
         self.pumped_flows = pd.Series(
             index=simulation.rainfall.index, data=0.0, name=f"{self.name}_pumped_flows"
         )
+        self.results = [self.pumped_flows]
 
         # register with simulation
-        self.simulation.demands[self.name] = self
+        self.simulation.pumps[self.name] = self
 
     def step(self):
         time = self.simulation.time

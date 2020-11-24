@@ -13,6 +13,7 @@ class Simulation:
         self.rainfall = rainfall
         self.pet = pet
 
+        # TODO check for name clashes and reject duplicates by subclassing dict
         self.surfaces = {}
         self.storages = {}
         self.demands = {}
@@ -40,9 +41,11 @@ class Simulation:
             for pump in self.pumps.values():
                 pump.step()
 
-        return self.mass_balance()
+        self.mass_balance()
 
     def mass_balance(self):
+        # TODO automatically register inflows and outflows within node objects
+        # so that mass balance accounting is auto updating
         def soil_stores(surface):
             return (
                 (
@@ -60,16 +63,29 @@ class Simulation:
 
         # inflows
         rainfall_volume = sum(
-            [
-                self.rainfall.sum() / 1000.0 * surface.area
-                for surface in self.surfaces.values()
-            ]
+            [surface.rainfall_volume.sum(0) for surface in self.surfaces.values()]
+        )
+        storage_direct_rainfall = sum(
+            [storage.direct_rainfall.sum() for storage in self.storages.values()]
         )
         external_supply = sum([main.supply.sum() for main in self.mains.values()])
         initial_storage = sum(
             [storage.initial_volume for storage in self.storages.values()]
         )
-        inflow_volume = rainfall_volume + external_supply + initial_storage
+        wastewater_streams = sum(
+            [
+                demand.wastewater_stream.sum()
+                for demand in self.demands.values()
+                if demand.wastewater_sink is not None
+            ]
+        )
+        inflow_volume = (
+            rainfall_volume
+            + storage_direct_rainfall
+            + external_supply
+            + initial_storage
+            + wastewater_streams
+        )
 
         # outflows
         surface_et = sum([surface.et.sum() for surface in self.surfaces.values()])
@@ -78,7 +94,10 @@ class Simulation:
             [storage.leakage.sum() for storage in self.storages.values()]
         )
         water_usage = sum(
-            [demand.source_supplied.sum() for demand in self.demands.values()]
+            [
+                demand.source_supplied.sum() + demand.backup_supplied.sum()
+                for demand in self.demands.values()
+            ]
         )
         end_storage_volumes = sum(
             [storage.volume[-1] for storage in self.storages.values()]
@@ -92,6 +111,20 @@ class Simulation:
         end_runoff_stores = sum(
             [surface.runoff_store[-1] for surface in self.surfaces.values()]
         )
+        nonrouted_total_runoff = sum(
+            [
+                surface.total_runoff.sum()
+                for surface in self.surfaces.values()
+                if surface.outlet is None
+            ]
+        )
+        nonrouted_storage_overflow = sum(
+            [
+                storage.overflow.sum()
+                for storage in self.storages.values()
+                if storage.outlet is None
+            ]
+        )
         outflow_volume = (
             surface_et
             + storage_et
@@ -101,6 +134,8 @@ class Simulation:
             + end_soil_stores
             + end_baseflow_stores
             + end_runoff_stores
+            + nonrouted_total_runoff
+            + nonrouted_storage_overflow
         )
 
         # report back
@@ -114,6 +149,23 @@ class Simulation:
         print(results)
         return results
 
+    def collate_results(self):
+        results = [self.rainfall, self.pet]
+        for surface in self.surfaces.values():
+            results = results + surface.results
+        for storage in self.storages.values():
+            results = results + storage.results
+        for demand in self.demands.values():
+            results = results + demand.results + [demand.demand]
+        for main in self.mains.values():
+            results = results + main.results
+        for pump in self.pumps.values():
+            pump = results + pump.results
+
+        results_df = pd.concat(results, axis=1)
+
+        return results_df
+
 
 # %%
 if __name__ == "__main__":
@@ -122,27 +174,41 @@ if __name__ == "__main__":
     silo_data = pd.read_csv(
         "-27.45_153.00.csv", index_col="YYYY-MM-DD", parse_dates=True
     )
-    # datetime_index = pd.date_range("2010-07-24", "2020-12-31", freq=timestep)
     rainfall = silo_data["daily_rain"]
     pet = silo_data["evap_pan"]
     timestep = rainfall.index.to_series().diff()[1]
-    # demand = (
-    #     pd.Series(index=datetime_index, data=np.random.random(size=len(datetime_index)))
-    #     * 10000
-    # )
+    demand = (
+        pd.Series(
+            name="demand",
+            index=rainfall.index,
+            data=np.random.random(size=len(rainfall.index)),
+        )
+        * 1000
+    )
+    pump_schedule = pd.Series(name="pump_schedule", index=rainfall.index, data=200.0,)
+
+    # create simulation
     sim = Simulation(timestep=timestep, rainfall=rainfall, pet=pet)
 
     # surfaces
-    # sink = Storage("sink", sim, 0, 100000, 0, 1.3, None)
-    pond = Storage("pond", sim, 1000, 5000, 2500, 50, None)
-    # field1 = Demand("field1", sim, demand, pond, None, None, 0)
-    catchmentA = SurfaceAWBM("catchmentA", sim, 50000.0, 0.5, pond)
+    wastewater_pond = Storage("wastewater_pond", sim, 0, 9999999999, 0, 0, None)
+    pondA = Storage("pondA", sim, 1000, 5000, 2500, 50, None)
+    pondB = Storage("pondB", sim, 2500, 7500, 6250, 0, None)
+    pump = Pump("pump", sim, pondA, pondB, pump_schedule)
+    mains = Mains("mains", sim)
+    fieldA = Demand("field1", sim, demand, pondB, mains, wastewater_pond, 0.85)
+    catchmentA = SurfaceAWBM("catchmentA", sim, 20000.0, 0.5, pondA)
+    catchmentB = SurfaceAWBM("catchmentB", sim, 50000.0, 0.0, pondB)
+    catchmentC = SurfaceAWBM("catchmentC", sim, 500.0, 0.99, pondB)
 
     sim.run()
 
     # %%
     start_date = "2010-10-01"
     end_date = "2011-04-01"
+
+    # start_date = "2005-01-01"
+    # end_date = "2005-06-01"
 
     pd.concat(
         [
@@ -156,7 +222,35 @@ if __name__ == "__main__":
 
     # %%
     pd.concat(
-        [pond.volume, pond.supplied, pond.overflow, pond.et, pond.leakage,], axis=1
+        [
+            pondA.inflow,
+            pondA.volume,
+            pondA.supplied,
+            pondA.overflow,
+            pondA.et,
+            pondA.leakage,
+        ],
+        axis=1,
     )[start_date:end_date].plot()
 
+    # %%
+    pd.concat(
+        [
+            pondB.inflow,
+            pondB.volume,
+            pondB.supplied,
+            pondB.overflow,
+            pondB.et,
+            pondB.leakage,
+        ],
+        axis=1,
+    )[start_date:end_date].plot()
+
+    # %%
+    pd.concat([fieldA.source_supplied, fieldA.demand], axis=1)[
+        start_date:end_date
+    ].plot()
+
+    # %%
+    sim.collate_results().to_excel("full_results.xlsx")
 # %%
