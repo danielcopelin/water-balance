@@ -211,12 +211,8 @@ class SurfaceAWBM(Base):
         self.c2 = c2
         self.c3 = c3
         self.bfi = Factor(bfi)
-        self.kbase = Factor(
-            kbase
-        )  # TODO handle non-daily timesteps by converting this factor
-        self.ksurf = Factor(
-            ksurf
-        )  # TODO handle non-daily timesteps by converting this factor
+        self.kbase = Factor(kbase) ** (self.simulation.timestep / pd.Timedelta("1 day"))
+        self.ksurf = Factor(ksurf) ** (self.simulation.timestep / pd.Timedelta("1 day"))
         self.i = i
 
         self.rainfall_volume = pd.Series(
