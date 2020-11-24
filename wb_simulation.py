@@ -190,7 +190,7 @@ if __name__ == "__main__":
     # create simulation
     sim = Simulation(timestep=timestep, rainfall=rainfall, pet=pet)
 
-    # surfaces
+    # nodes
     wastewater_pond = Storage("wastewater_pond", sim, 0, 9999999999, 0, 0, None)
     pondA = Storage("pondA", sim, 1000, 5000, 2500, 50, None)
     pondB = Storage("pondB", sim, 2500, 7500, 6250, 0, None)
@@ -216,6 +216,17 @@ if __name__ == "__main__":
             catchmentA.baseflow_store,
             catchmentA.runoff_store,
             catchmentA.total_runoff,
+        ],
+        axis=1,
+    )[start_date:end_date].plot()
+
+    # %%
+    pd.concat(
+        [
+            catchmentC.imp_excess,
+            catchmentC.baseflow_store,
+            catchmentC.runoff_store,
+            catchmentC.total_runoff,
         ],
         axis=1,
     )[start_date:end_date].plot()
