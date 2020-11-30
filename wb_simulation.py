@@ -191,15 +191,17 @@ if __name__ == "__main__":
     sim = Simulation(timestep=timestep, rainfall=rainfall, pet=pet)
 
     # nodes
-    wastewater_pond = Storage("wastewater_pond", sim, 0, 9999999999, 0, 0, None)
-    pondA = Storage("pondA", sim, 1000, 5000, 2500, 50, None)
-    pondB = Storage("pondB", sim, 2500, 7500, 6250, 0, None)
-    pump = Pump("pump", sim, pondA, pondB, pump_schedule)
-    mains = Mains("mains", sim)
-    fieldA = Demand("field1", sim, demand, pondB, mains, wastewater_pond, 0.85)
-    catchmentA = SurfaceAWBM("catchmentA", sim, 20000.0, 0.5, pondA)
-    catchmentB = SurfaceAWBM("catchmentB", sim, 50000.0, 0.0, pondB)
-    catchmentC = SurfaceAWBM("catchmentC", sim, 500.0, 0.99, pondB)
+    # wastewater_pond = Storage("wastewater_pond", sim, 0, 9999999999, 0, 0, None)
+    # pondA = Storage("pondA", sim, 1000, 5000, 2500, 50, None)
+    # pondB = Storage("pondB", sim, 2500, 7500, 6250, 0, None)
+    # pump = Pump("pump", sim, pondA, pondB, pump_schedule)
+    # mains = Mains("mains", sim)
+    # fieldA = Demand("field1", sim, demand, pondB, mains, wastewater_pond, 0.85)
+    # catchmentA = SurfaceAWBM("catchmentA", sim, 20000.0, 0.5, pondA)
+    # catchmentB = SurfaceAWBM("catchmentB", sim, 50000.0, 0.0, pondB)
+    # catchmentC = SurfaceAWBM("catchmentC", sim, 500.0, 0.99, pondB)
+
+    test = SurfaceAWBM("test", sim, 10000.0, 0.0, None)
 
     sim.run()
 
@@ -211,12 +213,7 @@ if __name__ == "__main__":
     # end_date = "2005-06-01"
 
     pd.concat(
-        [
-            catchmentA.imp_excess,
-            catchmentA.baseflow_store,
-            catchmentA.runoff_store,
-            catchmentA.total_runoff,
-        ],
+        [test.imp_excess, test.baseflow_store, test.runoff_store, test.total_runoff,],
         axis=1,
     )[start_date:end_date].plot()
 
@@ -263,5 +260,5 @@ if __name__ == "__main__":
     ].plot()
 
     # %%
-    sim.collate_results().to_excel("full_results.xlsx")
+    sim.collate_results().to_csv("test_1ha_0pc_impervious.csv")
 # %%
